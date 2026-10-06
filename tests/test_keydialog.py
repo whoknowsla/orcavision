@@ -14,7 +14,7 @@ def make_dialog(submodules):
     events = []
     dialogs = []
 
-    def make(current="anthropic"):
+    def make(current="anthropic", environment=frozenset()):
         dialog = submodules.keydialog.ApiKeyDialog(
             PROVIDERS,
             current,
@@ -22,6 +22,7 @@ def make_dialog(submodules):
             lambda provider, key: events.append(("save", provider, key)),
             lambda provider: events.append(("remove", provider)),
             lambda: events.append(("close",)),
+            environment=environment,
         )
         dialogs.append(dialog)
         return dialog
@@ -44,6 +45,7 @@ def test_key_entry_is_masked_and_labelled(make_dialog):
     assert targets["API key:"] is dialog.key
     assert targets["Provider:"] is dialog.provider
     assert "Keys are stored in the test keyring, not in Orca's settings." in targets
+    assert "Checking which keys are stored." in targets
 
 
 def test_unknown_provider_falls_back_to_first(make_dialog):
@@ -71,3 +73,55 @@ def test_remove_and_cancel(make_dialog, submodules):
     dialog.dialog.response(Gtk.ResponseType.CANCEL)
     assert events == [("close",)]
     assert dialog.key.get_text() == ""
+
+
+def provider_texts(dialog):
+    return [row[0] for row in dialog.provider.get_model()]
+
+
+def test_remove_button_hidden_until_keys_are_known(make_dialog):
+    make, _events = make_dialog
+    dialog = make("openai")
+    dialog.dialog.show_all()  # Realizes visibility flags; the window is destroyed unseen.
+    dialog.dialog.hide()
+    assert not dialog.remove_button.get_visible()
+    assert provider_texts(dialog) == ["OpenAI", "Claude"]
+
+
+def test_stored_keys_are_shown_and_remove_follows_the_selection(make_dialog):
+    make, _events = make_dialog
+    dialog = make("anthropic", environment=frozenset({"anthropic"}))
+    dialog.set_stored({"openai"})
+
+    assert dialog.summary.get_text() == "Stored keys: OpenAI."
+    assert provider_texts(dialog) == [
+        "OpenAI (key stored)",
+        "Claude (no stored key, using its environment variable)",
+    ]
+    assert dialog.provider.get_active_id() == "anthropic"
+    assert not dialog.remove_button.get_visible()
+
+    dialog.provider.set_active_id("openai")
+    assert dialog.remove_button.get_visible()
+    dialog.provider.set_active_id("anthropic")
+    assert not dialog.remove_button.get_visible()
+
+
+def test_no_stored_keys(make_dialog):
+    make, _events = make_dialog
+    dialog = make("openai")
+    dialog.set_stored(set())
+    assert dialog.summary.get_text() == "No API keys are stored yet."
+    assert provider_texts(dialog) == ["OpenAI (no key)", "Claude (no key)"]
+    assert not dialog.remove_button.get_visible()
+
+
+def test_failed_check_hides_remove(make_dialog):
+    make, _events = make_dialog
+    dialog = make("openai")
+    dialog.set_stored({"openai"})
+    assert dialog.remove_button.get_visible()
+    dialog.set_check_failed("The keyring is locked.")
+    assert dialog.summary.get_text() == (
+        "Could not check which keys are stored. The keyring is locked.")
+    assert not dialog.remove_button.get_visible()

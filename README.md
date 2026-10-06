@@ -46,7 +46,11 @@ settings button. Settings are stored in Orca's settings (dconf), under
 Press Orca+Ctrl+Alt+K, choose the provider, type the key into the masked
 field and press Save. The key goes straight into your keyring; it is never
 written to Orca's settings, and Orca does not echo it while you type.
-"Remove Stored Key" deletes it again.
+
+The dialog shows which providers already have a stored key, in a summary line
+and next to each provider's name, for example "OpenAI (key stored)". It
+checks without reading the keys or unlocking the keyring. "Remove Stored Key"
+appears only when the selected provider has a stored key.
 
 Where keys are kept is set by "Where to store API keys" in the settings.
 Automatic uses the first of these that is ready: a Secret Service keyring that

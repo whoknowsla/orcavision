@@ -108,6 +108,11 @@ class Backend:
 
         raise NotImplementedError
 
+    def has_key(self, provider: str) -> bool:
+        """Returns True if a key is stored for provider, without reading it if possible."""
+
+        return bool(self.lookup(provider))
+
     def store(self, provider: str, key: str) -> None:
         """Stores key for provider, replacing any stored key. Raises KeyStoreError."""
 
@@ -120,7 +125,16 @@ class Backend:
 
 
 class SecretServiceBackend(Backend):
-    """The freedesktop Secret Service, through libsecret."""
+    """The freedesktop Secret Service, through libsecret.
+
+    Entries are found by their attributes ("application" and "provider"), not
+    by libsecret's schema name: gnome-keyring can search a locked keyring by
+    ordinary attributes, but not by the hidden xdg:schema attribute. Matching by
+    schema name would make a locked keyring look empty instead of asking the
+    user to unlock it. Entries saved by earlier versions, which carry only
+    "provider" and the schema name, are still read and are rewritten in the
+    new form when found.
+    """
 
     name = "secret-service"
     label = "the Secret Service keyring"
@@ -130,6 +144,7 @@ class SecretServiceBackend(Backend):
     ) -> None:
         self._secret = None
         self._schema = None
+        self._legacy_schema = None
         self._timeout = timeout
         try:
             import gi  # pylint: disable=import-outside-toplevel
@@ -140,7 +155,17 @@ class SecretServiceBackend(Backend):
             return
         self._secret = Secret
         self._collection = collection or Secret.COLLECTION_DEFAULT
+        # libsecret still records the name, so it must differ from the legacy one:
+        # clearing legacy entries would otherwise delete new entries too.
         self._schema = Secret.Schema.new(
+            "org.gnome.Orca.OrcaVision.ApiKey",
+            Secret.SchemaFlags.DONT_MATCH_NAME,
+            {
+                "application": Secret.SchemaAttributeType.STRING,
+                "provider": Secret.SchemaAttributeType.STRING,
+            },
+        )
+        self._legacy_schema = Secret.Schema.new(
             "org.gnome.Orca.OrcaVision",
             Secret.SchemaFlags.NONE,
             {"provider": Secret.SchemaAttributeType.STRING},
@@ -192,20 +217,52 @@ class SecretServiceBackend(Backend):
         finally:
             timer.cancel()
 
-    def lookup(self, provider: str) -> str:
+    @staticmethod
+    def _attributes(provider: str) -> dict[str, str]:
+        return {"application": "orcavision", "provider": provider}
+
+    def _lookup(self, schema, attributes: dict[str, str]) -> str:
         value = self._run(
-            lambda cancellable: self._secret.password_lookup_sync(
-                self._schema, {"provider": provider}, cancellable
-            ),
+            lambda cancellable: self._secret.password_lookup_sync(schema, attributes, cancellable),
             "The keyring could not be read",
         )
         return value or ""
+
+    def _search(self, schema, attributes: dict[str, str]) -> bool:
+        # SearchFlags.ALL includes locked entries without unlocking them: no prompt.
+        items = self._run(
+            lambda cancellable: self._secret.password_search_sync(
+                schema, attributes, self._secret.SearchFlags.ALL, cancellable
+            ),
+            "The keyring could not be read",
+        )
+        return bool(items)
+
+    def _clear(self, schema, attributes: dict[str, str]) -> None:
+        self._run(
+            lambda cancellable: self._secret.password_clear_sync(schema, attributes, cancellable),
+            "The keyring could not be changed",
+        )
+
+    def lookup(self, provider: str) -> str:
+        value = self._lookup(self._schema, self._attributes(provider))
+        if value:
+            return value
+        value = self._lookup(self._legacy_schema, {"provider": provider})
+        if value:
+            self.store(provider, value)  # Rewrites it in the form a locked keyring can find.
+        return value
+
+    def has_key(self, provider: str) -> bool:
+        return self._search(self._schema, self._attributes(provider)) or self._search(
+            self._legacy_schema, {"provider": provider}
+        )
 
     def store(self, provider: str, key: str) -> None:
         stored = self._run(
             lambda cancellable: self._secret.password_store_sync(
                 self._schema,
-                {"provider": provider},
+                self._attributes(provider),
                 self._collection,
                 f"OrcaVision API key for {provider}",
                 key,
@@ -215,14 +272,11 @@ class SecretServiceBackend(Backend):
         )
         if not stored:
             raise KeyStoreError("The keyring refused the key.")
+        self._clear(self._legacy_schema, {"provider": provider})
 
     def clear(self, provider: str) -> None:
-        self._run(
-            lambda cancellable: self._secret.password_clear_sync(
-                self._schema, {"provider": provider}, cancellable
-            ),
-            "The keyring could not be changed",
-        )
+        self._clear(self._schema, self._attributes(provider))
+        self._clear(self._legacy_schema, {"provider": provider})
 
 
 class KWalletBackend(Backend):
@@ -303,6 +357,13 @@ class KWalletBackend(Backend):
             )
 
         return self._with_wallet(read)
+
+    def has_key(self, provider: str) -> bool:
+        def check(call, handle):
+            args = (handle, self._FOLDER, provider, self._APP_ID)
+            return "yes" if call("hasEntry", "(isss)", args, "(b)") else ""
+
+        return bool(self._with_wallet(check))
 
     def store(self, provider: str, key: str) -> None:
         def write(call, handle):
@@ -391,6 +452,9 @@ class SystemdCredsBackend(Backend):
         output = self._run(["decrypt", f"--name=orcavision-{provider}", path, "-"])
         return output.decode("utf-8").strip()
 
+    def has_key(self, provider: str) -> bool:
+        return os.path.exists(self._path(provider))
+
     def store(self, provider: str, key: str) -> None:
         try:
             os.makedirs(self._directory, mode=0o700, exist_ok=True)
@@ -472,6 +536,16 @@ class KeyStore:
             with self._lock:
                 self._cache[(backend.name, provider)] = value
         return value
+
+    def stored(self, providers: list[str], choice: str) -> set[str]:
+        """Returns which of providers have a stored key, without reading the keys."""
+
+        backend = self.backend(choice)
+        with self._lock:
+            known = {name for name in providers if self._cache.get((backend.name, name))}
+        return known | {
+            name for name in providers if name not in known and backend.has_key(name)
+        }
 
     def store(self, provider: str, key: str, choice: str) -> Backend:
         """Stores key for provider and returns the backend that holds it."""

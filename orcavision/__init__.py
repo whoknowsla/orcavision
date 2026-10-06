@@ -259,23 +259,46 @@ class OrcaVision(Extension):
         if self._key_dialog is not None:
             self._key_dialog.show()
             return True
+        choice = self._key_storage()
         try:
-            storage = self._keystore.backend(self._key_storage())
+            storage = self._keystore.backend(choice)
         except KeyStoreError as error:
             self.controller.present_message_internal(str(error))
             return True
 
-        current = self.settings.get("provider", default=DEFAULTS["provider"])
-        self._key_dialog = ApiKeyDialog(
+        names = [name for name, _label in key_provider_choices()]
+        dialog = self._key_dialog = ApiKeyDialog(
             key_provider_choices(),
-            current,
+            self.settings.get("provider", default=DEFAULTS["provider"]),
             storage.label,
             self._save_key,
             self._remove_key,
             self._on_key_dialog_closed,
+            environment=frozenset(
+                name for name in names if environment_api_key(get_provider(name).env_vars)
+            ),
         )
-        self._key_dialog.show()
+        dialog.show()
+
+        def check() -> None:
+            try:
+                stored, problem = self._keystore.stored(names, choice), ""
+            except KeyStoreError as error:
+                stored, problem = set(), str(error)
+            GLib.idle_add(self._show_stored_keys, dialog, stored, problem)
+
+        threading.Thread(target=check, name="orcavision-keys", daemon=True).start()
         return True
+
+    def _show_stored_keys(self, dialog: ApiKeyDialog, stored: set[str], problem: str) -> bool:
+        """Shows the result of the stored-key check, if the dialog is still open."""
+
+        if dialog is self._key_dialog:
+            if problem:
+                dialog.set_check_failed(problem)
+            else:
+                dialog.set_stored(stored)
+        return False
 
     def on_ready(self) -> None:
         self._move_legacy_keys()

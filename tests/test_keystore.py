@@ -25,6 +25,7 @@ class FakeBackend:
         self._present = present
         self.keys = {}
         self.lookups = 0
+        self.checks = []
         self.fail = False
 
     def available(self):
@@ -38,6 +39,12 @@ class FakeBackend:
         if self.fail:
             raise self.error("locked")
         return self.keys.get(provider, "")
+
+    def has_key(self, provider):
+        self.checks.append(provider)
+        if self.fail:
+            raise self.error("locked")
+        return provider in self.keys
 
     def store(self, provider, key):
         if self.fail:
@@ -126,7 +133,9 @@ def test_systemd_creds_round_trip(ks, tmp_path):
     assert backend.present()
 
     assert backend.lookup("openai") == ""
+    assert not backend.has_key("openai")
     backend.store("openai", "sk-secret-value")
+    assert backend.has_key("openai")
     path = tmp_path / "keys" / "openai.cred"
     assert stat.S_IMODE(os.stat(tmp_path / "keys").st_mode) == 0o700
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
@@ -209,23 +218,31 @@ def gnome_keyring(private_bus, tmp_path):
         pytest.skip("gnome-keyring-daemon is not installed")
     daemons = []
 
-    def start(broken=False):
+    def start(broken=False, restart=False):
+        """Starts the daemon; restart=True stops it and starts it again, locked."""
+
         home, runtime = tmp_path / "home", tmp_path / "run"
         keyrings = home / "data" / "keyrings"
-        keyrings.mkdir(parents=True)
-        runtime.mkdir(mode=0o700)
+        if restart:
+            for daemon in daemons:
+                daemon.terminate()
+                daemon.wait(10)
+        else:
+            keyrings.mkdir(parents=True)
+            runtime.mkdir(mode=0o700)
         env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "XDG_RUNTIME_DIR": str(runtime),
                "XDG_DATA_HOME": str(home / "data"), "DBUS_SESSION_BUS_ADDRESS": private_bus}
         command = ["gnome-keyring-daemon", "--foreground", "--components=secrets",
                    f"--control-directory={runtime}"]
+        unlock = not broken and not restart
         if broken:
             # An unreadable login keyring leaves no usable default collection.
             (keyrings / "login.keyring").write_bytes(os.urandom(105))
-        else:
+        elif unlock:
             command.append("--unlock")  # Creates an unlocked login keyring from stdin.
         daemon = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        daemon.stdin.write(b"" if broken else b"test-password")
+        daemon.stdin.write(b"test-password" if unlock else b"")
         daemon.stdin.close()
         daemons.append(daemon)
         return env
@@ -248,8 +265,9 @@ def test_secret_service_with_healthy_login_keyring(gnome_keyring, private_bus):
         backend.store("openai", "sk-two")
         print("replaced", backend.lookup("openai"))
         print("other", repr(backend.lookup("gemini")))
+        print("has", backend.has_key("openai"), backend.has_key("gemini"))
         backend.clear("openai")
-        print("cleared", repr(backend.lookup("openai")))
+        print("cleared", repr(backend.lookup("openai")), backend.has_key("openai"))
     """, private_bus, env=env)
     assert lines == [
         "available True",
@@ -257,7 +275,8 @@ def test_secret_service_with_healthy_login_keyring(gnome_keyring, private_bus):
         "lookup sk-one",
         "replaced sk-two",
         "other ''",
-        "cleared ''",
+        "has True False",
+        "cleared '' False",
     ]
 
 
@@ -391,6 +410,7 @@ def test_kwallet_against_fake_kwalletd(private_bus):
         store.store("openai", "sk-wallet", "auto")
         print("lookup", backend.lookup("openai"))
         print("folders", folders)
+        print("has", backend.has_key("openai"), backend.has_key("gemini"))
         store.clear("openai", "auto")
         print("cleared", repr(backend.lookup("openai")))
         print("handles left open", len(open_handles))
@@ -401,6 +421,7 @@ def test_kwallet_against_fake_kwalletd(private_bus):
         "missing ''",
         "lookup sk-wallet",
         "folders {'OrcaVision': {'openai': 'sk-wallet'}}",
+        "has True False",
         "cleared ''",
         "handles left open 0",
         "calls networkWallet,open,hasEntry,close,hasFolder,createFolder,writePassword,"
@@ -423,3 +444,70 @@ def test_kwallet_that_is_not_running_is_not_chosen_automatically(private_bus, tm
               ks._name_activatable("org.freedesktop.secrets"))
     """, private_bus)
     assert lines == ["present True available False", "dbus owned True secrets False False"]
+
+
+def test_stored_uses_cache_and_checks_without_reading(ks, fake):
+    backend = fake("secret-service")
+    backend.keys = {"openai": "sk-1", "gemini": "g"}
+    store = ks.KeyStore([backend])
+    assert store.lookup("openai", "auto") == "sk-1"  # Now cached.
+
+    assert store.stored(["openai", "anthropic", "gemini"], "auto") == {"openai", "gemini"}
+    assert backend.checks == ["anthropic", "gemini"]
+    assert backend.lookups == 1
+
+
+def test_stored_errors_propagate(ks, fake):
+    backend = fake("secret-service")
+    backend.fail = True
+    with pytest.raises(ks.KeyStoreError, match="locked"):
+        ks.KeyStore([backend]).stored(["openai"], "auto")
+
+
+def test_locked_keyring_is_checked_without_a_prompt(gnome_keyring, private_bus):
+    """A locked keyring still shows which keys exist, without asking for a password.
+
+    The private bus has no prompter, so anything that tried to unlock would time out.
+    """
+
+    env = gnome_keyring()
+    run_script("""
+        backend = ks.SecretServiceBackend()
+        wait_for(backend.available)
+        backend.store("openai", "sk-locked")
+    """, private_bus, env=env)
+
+    env = gnome_keyring(restart=True)  # Same keyring file, now locked.
+    lines = run_script("""
+        backend = ks.SecretServiceBackend(timeout=5)
+        print("available", wait_for(backend.available))
+        started = time.monotonic()
+        print("has", backend.has_key("openai"), backend.has_key("gemini"))
+        print("quick", time.monotonic() - started < 4)
+    """, private_bus, env=env)
+    assert lines == ["available True", "has True False", "quick True"]
+
+
+def test_entry_from_earlier_version_is_read_and_rewritten(gnome_keyring, private_bus):
+    env = gnome_keyring()
+    lines = run_script("""
+        from gi.repository import Secret
+        legacy = Secret.Schema.new("org.gnome.Orca.OrcaVision", Secret.SchemaFlags.NONE,
+                                   {"provider": Secret.SchemaAttributeType.STRING})
+        backend = ks.SecretServiceBackend()
+        wait_for(backend.available)
+        Secret.password_store_sync(legacy, {"provider": "openai"}, Secret.COLLECTION_DEFAULT,
+                                   "OrcaVision API key for openai", "sk-old", None)
+        print("has", backend.has_key("openai"), backend.has_key("gemini"))
+        print("lookup", backend.lookup("openai"))
+        print("old form left", Secret.password_lookup_sync(legacy, {"provider": "openai"}, None))
+    """, private_bus, env=env)
+    assert lines == ["has True False", "lookup sk-old", "old form left None"]
+
+    env = gnome_keyring(restart=True)  # Locked: only the rewritten entry can be found now.
+    lines = run_script("""
+        backend = ks.SecretServiceBackend(timeout=5)
+        wait_for(backend.available)
+        print("has", backend.has_key("openai"))
+    """, private_bus, env=env)
+    assert lines == ["has True"]

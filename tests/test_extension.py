@@ -80,19 +80,34 @@ class FakeKeyStore:
         self.keys.pop(provider, None)
         return backend
 
+    def stored(self, providers, choice):
+        self.calls.append(("stored", tuple(providers), choice))
+        self.backend(choice)
+        return {name for name in providers if name in self.keys}
+
 
 class FakeDialog:
-    def __init__(self, providers, current, storage_label, on_save, on_remove, on_close):
+    def __init__(self, providers, current, storage_label, on_save, on_remove, on_close,
+                 environment=frozenset()):
         self.providers = providers
         self.current = current
         self.storage_label = storage_label
         self.on_save = on_save
         self.on_remove = on_remove
         self.on_close = on_close
+        self.environment = environment
         self.shown = 0
+        self.stored = None
+        self.check_failed = None
 
     def show(self):
         self.shown += 1
+
+    def set_stored(self, stored):
+        self.stored = stored
+
+    def set_check_failed(self, message):
+        self.check_failed = message
 
 
 class FakeProvider:
@@ -132,7 +147,8 @@ def env(ext_module, submodules, monkeypatch):
 
     dialogs = []
     monkeypatch.setattr(ext_module, "ApiKeyDialog",
-                        lambda *args: dialogs.append(FakeDialog(*args)) or dialogs[-1])
+                        lambda *args, **kwargs: dialogs.append(FakeDialog(*args, **kwargs))
+                        or dialogs[-1])
 
     extension = ext_module.OrcaVision()
     keystore = extension._keystore = FakeKeyStore()
@@ -492,3 +508,33 @@ def test_saving_and_removing_keys(env):
     env.threads.run_all()
     assert env.controller.messages[-1] == (
         "The OpenAI API key was not changed. The keyring refused the key.")
+
+
+def test_manage_keys_shows_which_keys_are_stored(env):
+    env.keystore.keys["anthropic"] = "sk-stored"
+    env.ext.manage_api_keys()
+    dialog = env.dialogs[0]
+    assert dialog.stored is None  # Checked in the background, after the dialog appears.
+    # The fake provider reads OPENAI_API_KEY, which the env fixture sets.
+    assert dialog.environment == {"openai", "anthropic", "gemini", "openai-compatible"}
+
+    env.threads.run_all()
+    assert dialog.stored == {"anthropic"}
+    assert ("stored", ("openai", "anthropic", "gemini", "openai-compatible"), "auto") in (
+        env.keystore.calls)
+
+
+def test_manage_keys_reports_failed_check(env):
+    env.ext.manage_api_keys()
+    env.keystore.error = env.KeyStoreError("The keyring is locked.")
+    env.threads.run_all()
+    assert env.dialogs[0].check_failed == "The keyring is locked."
+    assert env.dialogs[0].stored is None
+
+
+def test_check_result_is_ignored_after_dialog_closes(env):
+    env.ext.manage_api_keys()
+    dialog = env.dialogs[0]
+    dialog.on_close()
+    env.threads.run_all()
+    assert dialog.stored is None

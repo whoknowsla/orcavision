@@ -28,12 +28,16 @@ description is also copied to the clipboard (this can be turned off).
 ## Install
 
 ```sh
-./install.sh            # copies orcavision/ into ~/.local/share/orca/extensions and approves it
-orca --replace &        # restart Orca to load it
+./install.sh              # copies orcavision/ into ~/.local/share/orca/extensions and approves it
+orca --replace &          # restart Orca to load it
+./install.sh --uninstall  # revokes approval and removes the installed copy
 ```
 
 Run `./install.sh` again after any change: Orca refuses to load an extension
-whose contents changed until it is approved again.
+whose contents changed until it is approved again. If OrcaVision is already
+installed, the script asks before replacing it, and `--uninstall` asks before
+removing it. Uninstalling leaves OrcaVision's settings and stored API keys in
+place.
 
 ## Settings
 

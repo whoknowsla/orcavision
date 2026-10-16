@@ -176,12 +176,13 @@ def test_commands_and_default_keys(ext_module):
     assert desktop.laptop_keybinding.modifiers == desktop.desktop_keybinding.modifiers
 
     focused = commands["orcavision_describe_object"]
-    assert focused.desktop_keybinding.modifiers == kb.ORCA_CTRL_ALT_MODIFIER_MASK
+    assert focused.desktop_keybinding.modifiers == (
+        kb.ORCA_CTRL_MODIFIER_MASK | kb.ALT_MODIFIER_MASK)
 
     keys = commands["orcavision_manage_keys"]
     assert keys.function == extension.manage_api_keys
     assert (keys.desktop_keybinding.keysymstring, keys.desktop_keybinding.modifiers) == (
-        "k", kb.ORCA_CTRL_ALT_MODIFIER_MASK)
+        "k", kb.ORCA_CTRL_MODIFIER_MASK | kb.ALT_MODIFIER_MASK)
 
     for name in ("orcavision_describe_clipboard", "orcavision_repeat_description",
                  "orcavision_cancel"):
@@ -391,6 +392,14 @@ def test_waiting_beep_repeats(env):
 def test_shutdown_stops_timers(env):
     env.ext.describe_desktop()
     env.ext.on_shutdown()
+    assert env.glib.timeouts == {}
+    env.threads.run_all()
+    assert env.controller.messages == []
+
+
+def test_disabling_stops_request(env):
+    env.ext.describe_desktop()
+    env.ext.on_disabled()
     assert env.glib.timeouts == {}
     env.threads.run_all()
     assert env.controller.messages == []

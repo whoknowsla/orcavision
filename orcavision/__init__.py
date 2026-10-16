@@ -69,8 +69,9 @@ class OrcaVision(Extension):
 
     GROUP_LABEL = "OrcaVision"
     DESCRIPTION = "Describes the active window, desktop, focused object or clipboard image with a vision model."
-    VERSION = "1.0"
+    VERSION = "1.1"
     AUTHOR = "Deniz Aygun"
+    WEBSITE = "https://github.com/whoknowsla/orcavision"
 
     def __init__(self) -> None:
         self._generation = 0
@@ -143,6 +144,7 @@ class OrcaVision(Extension):
 
     def _get_commands(self) -> list[Command]:
         orca_ctrl = keybindings.ORCA_CTRL_MODIFIER_MASK
+        orca_ctrl_alt = orca_ctrl | keybindings.ALT_MODIFIER_MASK
         definitions: list[tuple[str, Callable[[], bool], str, tuple[str, int] | None]] = [
             (
                 "orcavision_describe_window",
@@ -160,13 +162,13 @@ class OrcaVision(Extension):
                 "orcavision_describe_object",
                 self.describe_focused_object,
                 "Describes the focused object",
-                ("d", keybindings.ORCA_CTRL_ALT_MODIFIER_MASK),
+                ("d", orca_ctrl_alt),
             ),
             (
                 "orcavision_manage_keys",
                 self.manage_api_keys,
                 "Stores or removes API keys in the keyring",
-                ("k", keybindings.ORCA_CTRL_ALT_MODIFIER_MASK),
+                ("k", orca_ctrl_alt),
             ),
             (
                 "orcavision_describe_clipboard",
@@ -305,6 +307,9 @@ class OrcaVision(Extension):
 
     def on_enabled(self) -> None:
         self._move_legacy_keys()
+
+    def on_disabled(self) -> None:
+        self._end_request()
 
     def on_shutdown(self) -> None:
         self._end_request()

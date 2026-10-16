@@ -134,7 +134,6 @@ def install_fake_orca(setitem):
     keybindings.ALT_MODIFIER_MASK = 1 << 3
     keybindings.ORCA_MODIFIER_MASK = 1 << 8
     keybindings.ORCA_CTRL_MODIFIER_MASK = (1 << 8) | (1 << 2)
-    keybindings.ORCA_CTRL_ALT_MODIFIER_MASK = (1 << 8) | (1 << 2) | (1 << 3)
     command = types.ModuleType("orca.command")
     command.Command = object
     command.KeyboardCommand = FakeKeyboardCommand

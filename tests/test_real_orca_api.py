@@ -17,7 +17,6 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent / "orcavision"
 
 SCRIPT = textwrap.dedent("""
     import importlib.util, sys
-    import orca.command_manager  # import first to avoid a circular import in orca.extension
     from orca import keybindings
     from orca.command import KeyboardCommand
     from orca.extension import ExtensionPreference
@@ -26,6 +25,9 @@ SCRIPT = textwrap.dedent("""
     package_dir = sys.argv[1]
     metadata = ExtensionLoader.get_metadata(package_dir)
     assert ExtensionLoader.get_class_name(package_dir) == "OrcaVision", metadata
+    assert metadata.version == "1.1", metadata
+    assert metadata.author == "Deniz Aygun", metadata
+    assert metadata.website == "https://github.com/whoknowsla/orcavision", metadata
     print("metadata", metadata)
 
     name = "orca_user_extension.orcavision"
@@ -50,7 +52,8 @@ SCRIPT = textwrap.dedent("""
         keybindings.ORCA_CTRL_MODIFIER_MASK | keybindings.SHIFT_MODIFIER_MASK)
     assert bound["orcavision_cancel"] is None
     assert bound["orcavision_manage_keys"].keysymstring == "k"
-    assert bound["orcavision_manage_keys"].modifiers == keybindings.ORCA_CTRL_ALT_MODIFIER_MASK
+    assert bound["orcavision_manage_keys"].modifiers == (
+        keybindings.ORCA_CTRL_MODIFIER_MASK | keybindings.ALT_MODIFIER_MASK)
     print("ok", len(preferences), len(commands))
 """)
 

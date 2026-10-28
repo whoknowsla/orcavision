@@ -280,7 +280,7 @@ class AnthropicProvider(Provider):
     label = "Claude"
     uses_api_key = True
     env_vars = ("ANTHROPIC_API_KEY",)
-    default_model = "claude-opus-5-5"
+    default_model = "claude-sonnet-5-5"
     url = "https://api.anthropic.com/v1/messages"
 
     # Current Claude models always think, and thinking counts toward

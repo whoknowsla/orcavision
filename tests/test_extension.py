@@ -194,7 +194,7 @@ def test_preferences_and_defaults(env):
     preferences = {p.key: p for p in env.ext.get_preferences() if p.key}
     assert preferences["provider"].default == "openai"
     assert preferences["openai-model"].default == "gpt-4o"
-    assert preferences["anthropic-model"].default == "claude-opus-5-5"
+    assert preferences["anthropic-model"].default == "claude-sonnet-5-5"
     assert preferences["key-storage"].default == "auto"
     assert preferences["key-storage"].kwargs["options"] == env.sub.keystore.STORAGE_CHOICES
     assert not [key for key in preferences if key.endswith("-api-key")]

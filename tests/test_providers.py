@@ -250,7 +250,7 @@ ANTHROPIC_OK = {
 
 def test_anthropic_request_for_current_model(p):
     transport = FakeTransport(ok(p, ANTHROPIC_OK))
-    text = p.get_provider("anthropic").describe(request(p, model="claude-opus-5-5"), transport)
+    text = p.get_provider("anthropic").describe(request(p, model="claude-sonnet-5-5"), transport)
 
     assert text == "A settings dialog."
     call = transport.calls[0]
@@ -258,7 +258,7 @@ def test_anthropic_request_for_current_model(p):
     assert call["headers"] == {"x-api-key": "key", "anthropic-version": "2023-06-01",
                                "anthropic-beta": "server-side-fallback-2026-07-01"}
     payload = call["payload"]
-    assert payload["model"] == "claude-opus-5-5"
+    assert payload["model"] == "claude-sonnet-5-5"
     assert payload["fallbacks"] == "default"
     assert payload["max_tokens"] == 16000
     assert "temperature" not in payload

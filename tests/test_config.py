@@ -10,7 +10,7 @@ def test_defaults(config):
     defaults = config.DEFAULTS
     assert defaults["provider"] == "openai"
     assert defaults["openai-model"] == "gpt-4o"
-    assert defaults["anthropic-model"] == "claude-opus-5-5"
+    assert defaults["anthropic-model"] == "claude-sonnet-5-5"
     assert defaults["gemini-model"] == "gemini-2.5-flash"
     assert defaults["ollama-model"] == ""
     assert defaults["openai-compatible-model"] == ""
